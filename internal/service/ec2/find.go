@@ -691,6 +691,44 @@ func FindSubnetByID(conn *ec2.EC2, id string) (*ec2.Subnet, error) {
 	return output.Subnets[0], nil
 }
 
+func FindSubnetCidrReservationBySubnetIDAndReservationID(conn *ec2.EC2, subnetID, reservationID string) (*ec2.SubnetCidrReservation, error) {
+	input := &ec2.GetSubnetCidrReservationsInput{
+		SubnetId: aws.String(subnetID),
+	}
+
+	output, err := conn.GetSubnetCidrReservations(input)
+
+	if tfawserr.ErrCodeEquals(err, ErrCodeInvalidSubnetIDNotFound) {
+		return nil, &resource.NotFoundError{
+			LastError: err,
+		}
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	if output == nil || (len(output.SubnetIpv4CidrReservations) == 0 && len(output.SubnetIpv6CidrReservations) == 0) {
+		return nil, tfresource.NewEmptyResultError(input)
+	}
+
+	for _, r := range output.SubnetIpv4CidrReservations {
+		if aws.StringValue(r.SubnetCidrReservationId) == reservationID {
+			return r, nil
+		}
+	}
+	for _, r := range output.SubnetIpv6CidrReservations {
+		if aws.StringValue(r.SubnetCidrReservationId) == reservationID {
+			return r, nil
+		}
+	}
+
+	return nil, &resource.NotFoundError{
+		LastError:   err,
+		LastRequest: input,
+	}
+}
+
 func FindTransitGatewayPrefixListReference(conn *ec2.EC2, transitGatewayRouteTableID string, prefixListID string) (*ec2.TransitGatewayPrefixListReference, error) {
 	filters := map[string]string{
 		"prefix-list-id": prefixListID,
@@ -1310,4 +1348,49 @@ func FindPlacementGroupByName(conn *ec2.EC2, name string) (*ec2.PlacementGroup, 
 	}
 
 	return placementGroup, nil
+}
+
+func FindVPCEndpointConnectionByServiceIDAndVPCEndpointID(conn *ec2.EC2, serviceID, vpcEndpointID string) (*ec2.VpcEndpointConnection, error) {
+	input := &ec2.DescribeVpcEndpointConnectionsInput{
+		Filters: BuildAttributeFilterList(map[string]string{
+			"service-id": serviceID,
+			// "InvalidFilter: The filter vpc-endpoint-id  is invalid"
+			// "vpc-endpoint-id ": vpcEndpointID,
+		}),
+	}
+
+	var output *ec2.VpcEndpointConnection
+
+	err := conn.DescribeVpcEndpointConnectionsPages(input, func(page *ec2.DescribeVpcEndpointConnectionsOutput, lastPage bool) bool {
+		if page == nil {
+			return !lastPage
+		}
+
+		for _, v := range page.VpcEndpointConnections {
+			if aws.StringValue(v.VpcEndpointId) == vpcEndpointID {
+				output = v
+
+				return false
+			}
+		}
+
+		return !lastPage
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if output == nil {
+		return nil, tfresource.NewEmptyResultError(input)
+	}
+
+	if vpcEndpointState := aws.StringValue(output.VpcEndpointState); vpcEndpointState == VPCEndpointStateDeleted {
+		return nil, &resource.NotFoundError{
+			Message:     vpcEndpointState,
+			LastRequest: input,
+		}
+	}
+
+	return output, nil
 }
