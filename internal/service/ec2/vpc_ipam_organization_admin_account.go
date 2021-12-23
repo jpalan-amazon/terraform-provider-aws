@@ -2,10 +2,12 @@ package ec2
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/organizations"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-aws/internal/conns"
 	"github.com/hashicorp/terraform-provider-aws/internal/verify"
@@ -15,8 +17,6 @@ func ResourceVPCIpamOrganizationAdminAccount() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceVPCIpamOrganizationAdminAccountCreate,
 		Read:   resourceVPCIpamOrganizationAdminAccountRead,
-		// TODO: validate update is possible
-		// Update: resourceVPCIpamOrganizationAdminAccountUpdate,
 		Delete: resourceVPCIpamOrganizationAdminAccountDelete,
 
 		Importer: &schema.ResourceImporter{
@@ -25,10 +25,9 @@ func ResourceVPCIpamOrganizationAdminAccount() *schema.Resource {
 
 		Schema: map[string]*schema.Schema{
 			"delegated_admin_account_id": {
-				Type:     schema.TypeString,
-				Required: true,
-				// ForceNew = true if cannot update in place - see L21
-				// ForceNew:     true,
+				Type:         schema.TypeString,
+				Required:     true,
+				ForceNew:     true,
 				ValidateFunc: verify.ValidAccountID,
 			},
 		},
@@ -64,25 +63,22 @@ func resourceVPCIpamOrganizationAdminAccountCreate(d *schema.ResourceData, meta 
 
 func resourceVPCIpamOrganizationAdminAccountRead(d *schema.ResourceData, meta interface{}) error {
 	org_conn := meta.(*conns.AWSClient).OrganizationsConn
-	// ListDelegatedAdministratorsInput
 
-	// if err != nil {
-	// 	return fmt.Errorf("error reading VPCIpam Organization Admin Account (%s): %w", d.Id(), err)
-	// }
+	adminAccountID := d.Get("delegated_admin_account_id").(string)
+	output_id, err := findDelegatedAccountById(org_conn, adminAccountID)
 
-	// if adminAccount == nil {
-	// 	log.Printf("[WARN] VPCIpam Organization Admin Account (%s) not found, removing from state", d.Id())
-	// 	d.SetId("")
-	// 	return nil
-	// }
+	if err != nil {
+		return fmt.Errorf("error reading VPCIpam Organization Admin Account (%s): %w", d.Id(), err)
+	}
 
-	return nil
-}
+	if output_id == "" {
+		log.Printf("[WARN] VPCIpam Organization Admin Account (%s) not found, removing from state", d.Id())
+		d.SetId("")
+		return nil
+	}
 
-func resourceVPCIpamOrganizationAdminAccountUpdate(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*conns.AWSClient).EC2Conn
-	// need to check if its possbile to overwrite
-	// likely youll just run the same steps from Create()
+	d.Set("id", output_id)
+
 	return nil
 }
 
@@ -90,6 +86,10 @@ func resourceVPCIpamOrganizationAdminAccountDelete(d *schema.ResourceData, meta 
 	conn := meta.(*conns.AWSClient).EC2Conn
 
 	account_id, _, err := DecodeIpamPoolCidrID(d.Id())
+
+	if err != nil {
+		return fmt.Errorf("error reading VPCIpam Organization Admin Account ID (%s): %w", d.Id(), err)
+	}
 
 	input := &ec2.DisableIpamOrganizationAdminAccountInput{
 		DelegatedAdminAccountId: aws.String(account_id),
@@ -116,4 +116,48 @@ func DecodeIpamOrgAdminId(id string) (string, string, error) {
 		return "", "", fmt.Errorf("expected ID in the form of <account_id>_<service_principal>, given: %q", id)
 	}
 	return idParts[0], idParts[1], nil
+}
+
+func findDelegatedAccountById(conn *organizations.Organizations, id string) (string, error) {
+
+	// List files in path, keep listing until no more objects are found
+	nextToken := ""
+	hasMore := true
+	for hasMore {
+		administrators_input := &organizations.ListDelegatedAdministratorsInput{
+			ServicePrincipal: aws.String(ipam_service_principal),
+		}
+
+		if nextToken != "" {
+			administrators_input.SetNextToken(nextToken)
+		}
+
+		output, err := conn.ListDelegatedAdministrators(administrators_input)
+
+		if err != nil {
+			return "", err
+		}
+
+		if output != nil || output.DelegatedAdministrators != nil || len(output.DelegatedAdministrators) > 0 {
+
+			nextToken = aws.StringValue(output.NextToken)
+
+			if nextToken == "" {
+				hasMore = false
+			}
+
+			administrators_output := output.DelegatedAdministrators
+
+			for _, administrator := range administrators_output {
+				if administrator != nil {
+					administrator_id := *administrator.Id
+					if administrator != nil && administrator_id == id {
+						return administrator_id, nil
+					}
+				}
+			}
+		}
+	}
+
+	return "", nil
 }
