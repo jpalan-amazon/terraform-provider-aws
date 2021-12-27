@@ -10,6 +10,9 @@ description: |-
 
 Provides an IP address pool resource for IPAM.
 
+~> **NOTE:** In order to delete a pool all provisioned CIDRs and Allocations must be deprovisioned / released. For IPAM to properly manage the removal of allocation records created by VPCs and other resources, you must [grant it permissions](https://docs.aws.amazon.com/vpc/latest/ipam/choose-single-user-or-orgs-ipam.html) in
+either a single account or organizationally.
+
 ## Example Usage
 
 Basic usage:
