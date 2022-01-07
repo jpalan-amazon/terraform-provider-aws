@@ -1,9 +1,9 @@
 package ec2
 
-import (
+// ec2 has no action for Describe() to see if IPAM delegated admin has already been assigned
+import ( // nosemgrep: aws-sdk-go-multiple-service-imports
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -24,18 +24,34 @@ func ResourceVPCIpamOrganizationAdminAccount() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
+			"arn": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
 			"delegated_admin_account_id": {
 				Type:         schema.TypeString,
 				Required:     true,
 				ForceNew:     true,
 				ValidateFunc: verify.ValidAccountID,
 			},
+			"email": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+			"name": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+			"service_principal": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
 		},
 	}
 }
 
 const (
-	ipam_service_principal = "ipam.amazonaws.com"
+	Ipam_service_principal = "ipam.amazonaws.com"
 )
 
 func resourceVPCIpamOrganizationAdminAccountCreate(d *schema.ResourceData, meta interface{}) error {
@@ -56,7 +72,7 @@ func resourceVPCIpamOrganizationAdminAccountCreate(d *schema.ResourceData, meta 
 		return fmt.Errorf("error enabling IPAM Organization Admin Account (%s): %w", adminAccountID, err)
 	}
 
-	d.SetId(encodeIpamOrgAdminId(adminAccountID))
+	d.SetId(adminAccountID)
 
 	return resourceVPCIpamOrganizationAdminAccountRead(d, meta)
 }
@@ -64,20 +80,29 @@ func resourceVPCIpamOrganizationAdminAccountCreate(d *schema.ResourceData, meta 
 func resourceVPCIpamOrganizationAdminAccountRead(d *schema.ResourceData, meta interface{}) error {
 	org_conn := meta.(*conns.AWSClient).OrganizationsConn
 
-	adminAccountID := d.Get("delegated_admin_account_id").(string)
-	output_id, err := findDelegatedAccountById(org_conn, adminAccountID)
-
-	if err != nil {
-		return fmt.Errorf("error reading VPCIpam Organization Admin Account (%s): %w", d.Id(), err)
+	input := &organizations.ListDelegatedAdministratorsInput{
+		ServicePrincipal: aws.String(Ipam_service_principal),
 	}
 
-	if output_id == "" {
-		log.Printf("[WARN] VPCIpam Organization Admin Account (%s) not found, removing from state", d.Id())
+	output, err := org_conn.ListDelegatedAdministrators(input)
+
+	if err != nil {
+		return fmt.Errorf("error finding IPAM organization delegated account: (%s): %w", d.Id(), err)
+	}
+
+	if output == nil || len(output.DelegatedAdministrators) == 0 || output.DelegatedAdministrators[0] == nil {
+		log.Printf("[WARN] VPC Ipam Organization Admin Account (%s) not found, removing from state", d.Id())
 		d.SetId("")
 		return nil
 	}
 
-	d.Set("id", output_id)
+	admin_account := output.DelegatedAdministrators[0]
+
+	d.Set("arn", admin_account.Arn)
+	d.Set("delegated_admin_account_id", admin_account.Id)
+	d.Set("email", admin_account.Email)
+	d.Set("name", admin_account.Name)
+	d.Set("service_principal", Ipam_service_principal)
 
 	return nil
 }
@@ -85,79 +110,17 @@ func resourceVPCIpamOrganizationAdminAccountRead(d *schema.ResourceData, meta in
 func resourceVPCIpamOrganizationAdminAccountDelete(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*conns.AWSClient).EC2Conn
 
-	account_id, _, err := DecodeIpamPoolCidrID(d.Id())
-
-	if err != nil {
-		return fmt.Errorf("error reading VPCIpam Organization Admin Account ID (%s): %w", d.Id(), err)
-	}
-
 	input := &ec2.DisableIpamOrganizationAdminAccountInput{
-		DelegatedAdminAccountId: aws.String(account_id),
+		DelegatedAdminAccountId: aws.String(d.Id()),
 	}
 
 	output, err := conn.DisableIpamOrganizationAdminAccount(input)
 
 	if err != nil {
-		return fmt.Errorf("error disabling IPAM Organization Admin Account (%s): %w", account_id, err)
+		return fmt.Errorf("error disabling IPAM Organization Admin Account (%s): %w", d.Id(), err)
 	}
 	if !aws.BoolValue(output.Success) {
-		return fmt.Errorf("error disabling IPAM Organization Admin Account (%s): %w", account_id, err)
+		return fmt.Errorf("error disabling IPAM Organization Admin Account (%s): %w", d.Id(), err)
 	}
 	return nil
-}
-
-func encodeIpamOrgAdminId(account_id string) string {
-	return fmt.Sprintf("%s_%s", account_id, ipam_service_principal)
-}
-
-func DecodeIpamOrgAdminId(id string) (string, string, error) {
-	idParts := strings.Split(id, "_")
-	if len(idParts) != 2 || idParts[0] == "" || idParts[1] == "" {
-		return "", "", fmt.Errorf("expected ID in the form of <account_id>_<service_principal>, given: %q", id)
-	}
-	return idParts[0], idParts[1], nil
-}
-
-func findDelegatedAccountById(conn *organizations.Organizations, id string) (string, error) {
-
-	// List files in path, keep listing until no more objects are found
-	nextToken := ""
-	hasMore := true
-	for hasMore {
-		administrators_input := &organizations.ListDelegatedAdministratorsInput{
-			ServicePrincipal: aws.String(ipam_service_principal),
-		}
-
-		if nextToken != "" {
-			administrators_input.SetNextToken(nextToken)
-		}
-
-		output, err := conn.ListDelegatedAdministrators(administrators_input)
-
-		if err != nil {
-			return "", err
-		}
-
-		if output != nil || output.DelegatedAdministrators != nil || len(output.DelegatedAdministrators) > 0 {
-
-			nextToken = aws.StringValue(output.NextToken)
-
-			if nextToken == "" {
-				hasMore = false
-			}
-
-			administrators_output := output.DelegatedAdministrators
-
-			for _, administrator := range administrators_output {
-				if administrator != nil {
-					administrator_id := *administrator.Id
-					if administrator != nil && administrator_id == id {
-						return administrator_id, nil
-					}
-				}
-			}
-		}
-	}
-
-	return "", nil
 }

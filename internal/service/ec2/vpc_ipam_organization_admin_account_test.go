@@ -52,7 +52,7 @@ func testAccCheckVPCIpamOrganizationAdminAccountDestroy(s *terraform.State) erro
 	conn := acctest.Provider.Meta().(*conns.AWSClient).OrganizationsConn
 
 	for _, rs := range s.RootModule().Resources {
-		if rs.Type != "aws_vpc_ipam_organization_account_admin" {
+		if rs.Type != "aws_vpc_ipam_organization_admin_account" {
 			continue
 		}
 		id := rs.Primary.ID
@@ -115,13 +115,13 @@ func testAccCheckVPCIpamOrganizationAdminAccountExists(n string, org *organizati
 }
 
 func testAccVPCIpamOrganizationAdminAccountConfig() string {
-	return acctest.ConfigAlternateAccountProvider() + `
+	return acctest.ConfigCompose(acctest.ConfigAlternateAccountProvider() + `
 data "aws_caller_identity" "delegated" {
-	provider = "awsalternate"
+  provider = "awsalternate"
 }
 
 resource "aws_vpc_ipam_organization_admin_account" "test" {
-	delegated_admin_account_id = data.aws_caller_identity.delegated.account_id
+  delegated_admin_account_id = data.aws_caller_identity.delegated.account_id
 }
-`
+`)
 }
