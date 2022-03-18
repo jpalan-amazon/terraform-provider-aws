@@ -8,7 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/networkfirewall"
-	"github.com/hashicorp/aws-sdk-go-base/tfawserr"
+	"github.com/hashicorp/aws-sdk-go-base/v2/awsv1shim/v2/tfawserr"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/customdiff"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
@@ -185,10 +185,6 @@ func ResourceRuleGroup() *schema.Resource {
 															"destination": {
 																Type:     schema.TypeString,
 																Required: true,
-																ValidateFunc: validation.Any(
-																	verify.ValidIPv4CIDRNetworkAddress,
-																	validation.StringInSlice([]string{networkfirewall.StatefulRuleDirectionAny}, false),
-																),
 															},
 															"destination_port": {
 																Type:     schema.TypeString,
@@ -207,10 +203,6 @@ func ResourceRuleGroup() *schema.Resource {
 															"source": {
 																Type:     schema.TypeString,
 																Required: true,
-																ValidateFunc: validation.Any(
-																	verify.ValidIPv4CIDRNetworkAddress,
-																	validation.StringInSlice([]string{networkfirewall.StatefulRuleDirectionAny}, false),
-																),
 															},
 															"source_port": {
 																Type:     schema.TypeString,
